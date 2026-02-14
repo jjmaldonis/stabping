@@ -10,15 +10,15 @@ use std::thread;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use time::precise_time_ns;
 use chrono::Local;
 
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 
-use options::SENTINEL_ERROR;
-use options::TargetResults;
-use persist::TargetManager;
+use crate::options::SENTINEL_ERROR;
+use crate::options::TargetResults;
+use crate::persist::TargetManager;
 
 /**
  * Runs the TCP Ping target's data-collection worker.
@@ -31,6 +31,8 @@ pub fn run_tcpping_worker(manager: Arc<TargetManager>,
 
         // continue to collect data forever
         loop {
+            let loop_start = Instant::now();
+
             // retrieve the target's current options
             let (dur_interval, avg_across, dur_pause, num_addrs) = {
                 let ref opt = manager.options_read();
@@ -71,9 +73,15 @@ pub fn run_tcpping_worker(manager: Arc<TargetManager>,
                              * address
                              */
                             let start = precise_time_ns();
-                            if TcpStream::connect(a.as_str()).is_ok() {
-                                sum += precise_time_ns() - start;
-                                denom += 1;
+                            // Set a 30 second timeout for the TCP connection
+                            let timeout = Duration::from_secs(30);
+                            if let Ok(mut addrs) = a.as_str().to_socket_addrs() {
+                                if let Some(addr) = addrs.next() {
+                                    if TcpStream::connect_timeout(&addr, timeout).is_ok() {
+                                        sum += precise_time_ns() - start;
+                                        denom += 1;
+                                    }
+                                }
                             }
                             thread::sleep(dur_pause);
                         }
@@ -93,25 +101,20 @@ pub fn run_tcpping_worker(manager: Arc<TargetManager>,
                 t_opt.nonce
             };
 
-            /*
-             * wait out the designated data-collectiong interval, while giving
-             * the give the per-addr subthreads the entire interval of time to
-             * come back
-             */
-            thread::sleep(dur_interval);
-
             let mut data: Vec<i32> = Vec::with_capacity(3 + num_addrs);
 
             data.push(manager.kind.kind_id());
             data.push(nonce);
             data.push(timestamp);
 
-            // read back the data from the per-addr subthreads
+            // read back the data from the per-addr subthreads, blocking
+            // until each one completes (they always terminate due to the
+            // TCP connect timeout)
             for h in handles.drain(..) {
-                if let Ok(val) = h.try_recv() {
+                if let Ok(val) = h.recv() {
                     data.push(val);
                 } else {
-                    // on error or timeout, hand back a sentinel value
+                    // all sub-attempts failed (sender dropped without sending)
                     data.push(SENTINEL_ERROR);
                 }
             }
@@ -119,6 +122,12 @@ pub fn run_tcpping_worker(manager: Arc<TargetManager>,
             // send off our results to the main thread
             if results_out.send(TargetResults(data)).is_err() {
                 println!("Worker Control: failed to send final results back.");
+            }
+
+            // sleep for the remainder of the interval
+            let elapsed = loop_start.elapsed();
+            if elapsed < dur_interval {
+                thread::sleep(dur_interval - elapsed);
             }
         }
     })

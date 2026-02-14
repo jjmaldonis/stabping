@@ -276,7 +276,7 @@ class Options extends Component {
                 h('input', {
                     type: 'number',
                     value: this.state.avg_across,
-                    onInput: (evt) => this.setState({avg_across: evt.target.value})
+                    onInput: (evt) => this.setState({avg_across: parseInt(evt.target.value, 10)})
                 }),
                 'values'
             ]),
@@ -499,7 +499,7 @@ class Target extends Component {
                         this.persistentDataRetrieve(this.state.preset);
                     }.bind(this));
                 }.bind(this), function(err) {
-                    consoloe.log('Failed to update options on server! ' + err);
+                    console.log('Failed to update options on server! ' + err);
                 }.bind(this), JSON.stringify(newOpts))
             }
 
@@ -546,6 +546,8 @@ class Target extends Component {
                     onChange: this.onPresetChange.bind(this)
                 }, [
                     h('option', {value: -1}, 'Since Load'),
+                    h('option', {value: 1/60}, '1 Minute'),
+                    h('option', {value: 5/60}, '5 Minutes'),
                     h('option', {value: 0.25}, '15 Minutes'),
                     h('option', {value: 0.5}, '30 Minutes'),
                     h('option', {value: 1}, '1 Hour'),

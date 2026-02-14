@@ -18,17 +18,18 @@ use std::sync::Arc;
 
 use memmap::{Mmap, Protection};
 use iron::response::{WriteBody};
+use serde::{Serialize, Deserialize};
 
-use helpers::VecIntoRawBytes;
-use persist::TargetManager;
-use options::SENTINEL_NODATA;
+use crate::helpers::VecIntoRawBytes;
+use crate::persist::TargetManager;
+use crate::options::SENTINEL_NODATA;
 
 /**
  * A request from the client for persistent data for a target in the time range
  * `lower` to `upper` in context of the target's current options, verified
  * with `nonce`.
  */
-#[derive(RustcEncodable, RustcDecodable, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DataRequest {
     nonce: i32,
     lower: i32,
@@ -75,12 +76,12 @@ impl WriteBody for SPDataReader {
     /**
      * Writes the body of the response with the requested persistent data.
      */
-    fn write_body(&mut self, res: &mut io::Write) -> io::Result<()> {
+    fn write_body(&mut self, res: &mut dyn io::Write) -> io::Result<()> {
         /*
          * acquire nonce and current indices (current state of addrs for this
          * target) from the TargetManager
          */
-        let (nonce, ordered_list, mut membership) = self.tm.get_current_indices();
+        let (nonce, ordered_list, mut membership): (i32, Vec<i32>, Vec<i32>) = self.tm.get_current_indices();
 
         // verify that the request nonce and the manager's nonce match
         if nonce != self.tm.options_read().nonce {
@@ -92,13 +93,12 @@ impl WriteBody for SPDataReader {
         let guard = self.tm.data_file_read();
 
         // attempt to mmap the target's data file
-        let map = try!(
+        let map =
             Mmap::open(&*guard, Protection::Read)
             .map_err(|e| {
                 println!("ERROR: Mmap failed!");
                 e
-            })
-        );
+            })?;
 
         /*
          * attempt to read the raw bytes of the mapped data file as a series of
@@ -115,7 +115,7 @@ impl WriteBody for SPDataReader {
             }
             let new_len = orig.len() / mem::size_of::<DataElement>();
 
-            mem::forget(orig);
+            let _ = orig;
             slice::from_raw_parts(raw_ptr as *const DataElement, new_len)
         };
 
@@ -188,7 +188,7 @@ impl WriteBody for SPDataReader {
                 }
 
                 // write out the data and reset our buffer and time tracker
-                try!(writer.write_all(&buf.into_raw_bytes()));
+                writer.write_all(&buf.into_raw_bytes())?;
                 buf = Vec::with_capacity(1 + ordered_list.len());
                 cur = d.time;
             }
@@ -211,8 +211,8 @@ impl WriteBody for SPDataReader {
             buf.push(membership[i as usize]);
             membership[i as usize] = SENTINEL_NODATA;
         }
-        try!(writer.write_all(&buf.into_raw_bytes()));
-        try!(writer.flush());
+        writer.write_all(&buf.into_raw_bytes())?;
+        writer.flush()?;
 
         Ok(())
     }

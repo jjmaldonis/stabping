@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use ws;
 use ws::{Settings, Builder};
 
-use options::MainConfiguration;
+use crate::options::MainConfiguration;
 
 /**
  * Error container for websocket broadcasts.

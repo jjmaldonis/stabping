@@ -19,8 +19,8 @@ use std::ops::Deref;
 use std::iter;
 use std::iter::Extend;
 
-use helpers::{SPIOError, SPFile, VecIntoRawBytes, overwrite_json};
-use options::{TargetKind, TargetOptions, TargetResults, SENTINEL_NODATA};
+use crate::helpers::{SPIOError, SPFile, VecIntoRawBytes, overwrite_json};
+use crate::options::{TargetKind, TargetOptions, TargetResults, SENTINEL_NODATA};
 
 /**
  * A stabping-specific error container for errors incurred during TargetManager
@@ -68,25 +68,24 @@ impl AddrIndex {
      */
     fn from_path<'b>(path: &'b Path) -> Result<Self, ManagerError> {
         // attempt to open the index file
-        let mut index_file = try!(
+        let mut index_file =
             File::open_from(OpenOptions::new().read(true).append(true).create(true), path)
-            .map_err(|e| ManagerError::IndexFileIO(e))
-        );
+            .map_err(|e| ManagerError::IndexFileIO(e))?;
 
         let mut index_data = Vec::new();
         /*
          * if the index file is non-empty, read the data into a list that will
          * function as the index -> addr mapping
          */
-        if try!(index_file.length_p(path)
-                .map_err(|e| ManagerError::IndexFileIO(e))) > 0 {
+        if index_file.length_p(path)
+                .map_err(|e| ManagerError::IndexFileIO(e))? > 0 {
             use std::io::BufRead;
             let reader = BufReader::new(&mut index_file);
 
             for line_res in reader.lines() {
-                let line = try!(line_res
+                let line = line_res
                                 .map_err(|_| ManagerError::IndexFileIO(
-                                             SPIOError::Parse(Some(path.to_owned())))));
+                                             SPIOError::Parse(Some(path.to_owned()))))?;
                 index_data.push(line);
             }
         }
@@ -113,9 +112,9 @@ impl AddrIndex {
             // only deal with it if we don't already have it
             self.map.insert(addr.to_owned(), self.data.len() as i32);
             self.data.push(addr.to_owned());
-            try!(self.file.write_all(format!("{}\n", addr).as_bytes())
+            self.file.write_all(format!("{}\n", addr).as_bytes())
                  .map_err(|_| ManagerError::IndexFileIO(
-                              SPIOError::Write(None))));
+                              SPIOError::Write(None)))?;
         }
         Ok(())
     }
@@ -127,7 +126,7 @@ impl AddrIndex {
     fn ensure_for_addrs<'a, I, K>(&mut self, addrs: I) -> Result<(), ManagerError>
             where I: Iterator<Item=&'a K>, K: 'a + Deref<Target=str> {
         for addr in addrs {
-            try!(self.add_addr(&addr));
+            self.add_addr(&addr)?;
         }
         Ok(())
     }
@@ -180,36 +179,30 @@ impl TargetManager {
 
         // attempt to open the target's data file
         path.push(format!("{}.data.dat", kind.compact_name()));
-        let data_file = try!(
+        let data_file =
             File::open_from(OpenOptions::new().read(true).append(true).create(true), &path)
-            .map_err(|e| ManagerError::DataFileIO(e))
-        );
+            .map_err(|e| ManagerError::DataFileIO(e))?;
         path.pop();
 
         // attempt to open the target's options file
         let options_file_name = format!("{}.options.json", kind.compact_name());
         path.push(&options_file_name);
-        let mut options_file = try!(
+        let mut options_file =
             File::open_from(OpenOptions::new().read(true).write(true).create(true), &path)
-            .map_err(|e| ManagerError::OptionsFileIO(e))
-        );
+            .map_err(|e| ManagerError::OptionsFileIO(e))?;
 
         /*
          * read back existing options from the options file, or write out
          * default options for this target to the options file
          */
-        let options = if try!(options_file.length_p(&path)
-                              .map_err(|e| ManagerError::OptionsFileIO(e))) > 0 {
-            try!(
-                options_file.read_json_p(&path)
-                .map_err(|e| ManagerError::OptionsFileIO(e))
-            )
+        let options = if options_file.length_p(&path)
+                              .map_err(|e| ManagerError::OptionsFileIO(e))? > 0 {
+            options_file.read_json_p(&path)
+                .map_err(|e| ManagerError::OptionsFileIO(e))?
         } else {
             let default_options = kind.default_options();
-            try!(
-                options_file.write_json_p(&default_options, &path)
-                .map_err(|e| ManagerError::OptionsFileIO(e))
-            );
+            options_file.write_json_p(&default_options, &path)
+                .map_err(|e| ManagerError::OptionsFileIO(e))?;
             default_options
         };
 
@@ -221,8 +214,8 @@ impl TargetManager {
          * are present in the index
          */
         path.push(format!("{}.index.json", kind.compact_name()));
-        let mut index = try!(AddrIndex::from_path(&path));
-        try!(index.ensure_for_addrs(options.addrs.iter()));
+        let mut index = AddrIndex::from_path(&path)?;
+        index.ensure_for_addrs(options.addrs.iter())?;
         path.pop();
 
         // leave the path to the options file here so we can store it
@@ -249,13 +242,11 @@ impl TargetManager {
      */
     pub fn options_update(&self, new_options: TargetOptions) -> Result<(), ManagerError> {
         let mut guard = self.options.write().unwrap();
-        let mut options_path = self.options_path.lock().unwrap();
+        let options_path = self.options_path.lock().unwrap();
         *guard = new_options;
-        try!(
-            overwrite_json(&*guard, &*options_path)
-            .map_err(|e| ManagerError::OptionsFileIO(e))
-        );
-        try!(self.index.write().unwrap().ensure_for_addrs(guard.addrs.iter()));
+        overwrite_json(&*guard, &*options_path)
+            .map_err(|e| ManagerError::OptionsFileIO(e))?;
+        self.index.write().unwrap().ensure_for_addrs(guard.addrs.iter())?;
         println!("Updated {} options: {:?}", self.kind.compact_name(), *guard);
         Ok(())
     }
@@ -292,9 +283,9 @@ impl TargetManager {
         }
 
         let ref mut file = *self.data_file.write().unwrap();
-        try!(file.write_all(&out_data.into_raw_bytes())
+        file.write_all(&out_data.into_raw_bytes())
              .map_err(|_| ManagerError::DataFileIO(
-                          SPIOError::Write(None))));
+                          SPIOError::Write(None)))?;
         Ok(())
     }
 

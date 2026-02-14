@@ -3,13 +3,15 @@ name = "stabping"
 version = "0.9.1"
 authors = ["icasdri <icasdri@gmail.com>"]
 build = "build.rs"
+edition = "2021"
 
 [dependencies]
 time = "0.1"
 chrono = "0.2"
-rustc-serialize = "0.3"
-ws = "*"
-iron = "*"
-router = "*"
-mount = "*"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ws = "0.9"
+iron = "0.6"
+router = "0.6"
+mount = "0.4"
 memmap = "0.5"

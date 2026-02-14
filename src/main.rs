@@ -8,7 +8,8 @@
 
 extern crate chrono;
 extern crate time;
-extern crate rustc_serialize;
+extern crate serde;
+extern crate serde_json;
 extern crate memmap;
 extern crate ws;
 extern crate iron;
@@ -31,13 +32,11 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::mpsc::channel;
 
-use rustc_serialize::json;
+use crate::wsserver::Broadcaster;
 
-use wsserver::Broadcaster;
-
-use helpers::{SPIOError, SPFile, VecIntoRawBytes};
-use options::{TargetKind, MainConfiguration};
-use persist::ManagerError;
+use crate::helpers::{SPIOError, SPFile, VecIntoRawBytes};
+use crate::options::{TargetKind, MainConfiguration};
+use crate::persist::ManagerError;
 
 static CONFIG_FILENAME: &'static str = "stabping_config.json";
 
@@ -83,7 +82,7 @@ fn get_configuration() -> Option<(Arc<RwLock<MainConfiguration>>, PathBuf)> {
                         println!(
                             "\n{} configuration file. Invalid or missing JSON fields. Please ensure that this file is formatted like:\n{}\n",
                             err.description(),
-                            json::as_pretty_json(&MainConfiguration::default())
+                            serde_json::to_string_pretty(&MainConfiguration::default()).unwrap()
                         );
                         return None
                     },
@@ -126,7 +125,7 @@ fn get_configuration() -> Option<(Arc<RwLock<MainConfiguration>>, PathBuf)> {
      */
     println!(
         "\nFailed to find configuration file. Please ensure that 'stabping_config.json' is accessible in one of the above checked locations, and is formatted like:\n{}\n",
-        json::as_pretty_json(&MainConfiguration::default())
+        serde_json::to_string_pretty(&MainConfiguration::default()).unwrap()
     );
     None
 }

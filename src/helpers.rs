@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::fs::{OpenOptions, File};
 use std::io::{Read, Write};
 
-use rustc_serialize::{json, Encodable, Decodable};
+use serde::{Serialize, de::DeserializeOwned};
 
 /**
  * Stabping-specific I/O error container, representing the possible failrue
@@ -101,27 +101,27 @@ pub trait SPFile {
 
     /**
      * Attempts to read from this file and decode all its contents as a JSON
-     * object (`rustc::Decodable`).
+     * object (serde::Deserialize).
      */
-    fn read_json<T: Decodable>(&mut self) -> Result<T, SPIOError> {
+    fn read_json<T: DeserializeOwned>(&mut self) -> Result<T, SPIOError> {
         self._read_json(None)
     }
-    fn read_json_p<'a, T: Decodable>(&mut self, path: &'a Path) -> Result<T, SPIOError> {
+    fn read_json_p<'a, T: DeserializeOwned>(&mut self, path: &'a Path) -> Result<T, SPIOError> {
         self._read_json(Some(path))
     }
-    fn _read_json<'a, T: Decodable>(&mut self, path: Option<&'a Path>) -> Result<T, SPIOError>;
+    fn _read_json<'a, T: DeserializeOwned>(&mut self, path: Option<&'a Path>) -> Result<T, SPIOError>;
 
 
     /**
-     * Attempts to write a JSON object (`rustc::Encodable`) to this file.
+     * Attempts to write a JSON object (serde::Serialize) to this file.
      */
-    fn write_json<'b, T: Encodable>(&mut self, obj: &'b T) -> Result<(), SPIOError> {
+    fn write_json<'b, T: Serialize>(&mut self, obj: &'b T) -> Result<(), SPIOError> {
         self._write_json(obj, None)
     }
-    fn write_json_p<'a, 'b, T: Encodable>(&mut self, obj: &'b T, path: &'a Path) -> Result<(), SPIOError> {
+    fn write_json_p<'a, 'b, T: Serialize>(&mut self, obj: &'b T, path: &'a Path) -> Result<(), SPIOError> {
         self._write_json(obj, Some(path))
     }
-    fn _write_json<'a, 'b, T: Encodable>(&mut self, obj: &'b T, path: Option<&'a Path>) -> Result<(), SPIOError>;
+    fn _write_json<'a, 'b, T: Serialize>(&mut self, obj: &'b T, path: Option<&'a Path>) -> Result<(), SPIOError>;
 
 
     /**
@@ -138,54 +138,46 @@ pub trait SPFile {
 
 impl SPFile for File {
     fn open_from<'a, 'b>(oo: &'b mut OpenOptions, path: &'a Path) -> Result<File, SPIOError> {
-        Ok(try!(
+        Ok(
             oo.open(path)
-            .map_err(|_| SPIOError::Open(Some(path.to_owned())))
-        ))
+            .map_err(|_| SPIOError::Open(Some(path.to_owned())))?
+        )
     }
 
-    fn _read_json<'a, T: Decodable>(&mut self, path: Option<&'a Path>) -> Result<T, SPIOError> {
+    fn _read_json<'a, T: DeserializeOwned>(&mut self, path: Option<&'a Path>) -> Result<T, SPIOError> {
         let mut buffer = String::new();
-        try!(
-            self.read_to_string(&mut buffer)
-            .map_err(|_| SPIOError::Read(path.map(|p| p.to_owned())))
-        );
-        json::decode::<T>(&buffer)
+        self.read_to_string(&mut buffer)
+            .map_err(|_| SPIOError::Read(path.map(|p| p.to_owned())))?;
+        serde_json::from_str::<T>(&buffer)
             .map_err(|_| SPIOError::Parse(path.map(|p| p.to_owned())))
     }
 
-    fn _write_json<'a, 'b, T: Encodable>(&mut self, obj: &'b T, path: Option<&'a Path>) -> Result<(), SPIOError> {
-        let buffer = json::encode(obj).unwrap();
-        try!(
-            self.write_all(buffer.as_bytes())
-            .map_err(|_| SPIOError::Write(path.map(|p| p.to_owned())))
-        );
-        try!(
-            self.flush()
-            .map_err(|_| SPIOError::Write(path.map(|p| p.to_owned())))
-        );
+    fn _write_json<'a, 'b, T: Serialize>(&mut self, obj: &'b T, path: Option<&'a Path>) -> Result<(), SPIOError> {
+        let buffer = serde_json::to_string(obj).unwrap();
+        self.write_all(buffer.as_bytes())
+            .map_err(|_| SPIOError::Write(path.map(|p| p.to_owned())))?;
+        self.flush()
+            .map_err(|_| SPIOError::Write(path.map(|p| p.to_owned())))?;
         Ok(())
     }
 
     fn _length<'a>(&mut self, path: Option<&'a Path>) -> Result<u64, SPIOError> {
-        let meta = try!(
+        let meta =
             self.metadata()
-            .map_err(|_| SPIOError::Metadata(path.map(|p| p.to_owned())))
-        );
+            .map_err(|_| SPIOError::Metadata(path.map(|p| p.to_owned())))?;
         Ok(meta.len())
     }
 }
 
 /**
  * Overwrite (create if necessary, truncate if already exists) the file
- * residing at the given path with the given JSON object (`rustc::Encodable`).
+ * residing at the given path with the given JSON object (serde::Serialize).
  */
-pub fn overwrite_json<'a, 'b, T: Encodable>(obj: &'a T, path: &'b Path) -> Result<(), SPIOError> {
-    let mut file = try!(
+pub fn overwrite_json<'a, 'b, T: Serialize>(obj: &'a T, path: &'b Path) -> Result<(), SPIOError> {
+    let mut file =
         OpenOptions::new().write(true).truncate(true).create(true).open(path)
-        .map_err(|_| SPIOError::Open(Some(path.to_owned())))
-    );
+        .map_err(|_| SPIOError::Open(Some(path.to_owned())))?;
 
-    try!(file.write_json_p(obj, path));
+    file.write_json_p(obj, path)?;
     Ok(())
 }

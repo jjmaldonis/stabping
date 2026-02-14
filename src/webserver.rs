@@ -22,12 +22,11 @@ use iron::request::Body;
 use iron::status;
 use router::Router;
 use mount::Mount;
+use serde::de::DeserializeOwned;
 
-use rustc_serialize::{json, Decodable};
-
-use reader::{SPDataReader, DataRequest};
-use persist::{TargetManager, ManagerError};
-use options::{MainConfiguration, TargetOptions};
+use crate::reader::{SPDataReader, DataRequest};
+use crate::persist::TargetManager;
+use crate::options::{MainConfiguration, TargetOptions};
 
 /**
  * Stabping-specific web error container for use in Iron web responses.
@@ -57,7 +56,14 @@ impl Error for SPWebError {
 
 impl fmt::Display for SPWebError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.description())
+        write!(f, "{}", match *self {
+            SPWebError::NotFound => "Resource not found.",
+            SPWebError::InvalidMethod => "Invalid method.",
+            SPWebError::NotImplemented => "Handler not yet implemented.",
+            SPWebError::BadRequest => "Bad request (malformed or missing fields).",
+            SPWebError::ServerError => "Server encountered an error.",
+            SPWebError::NonceConflict => "The nonce given does not match the current nonce, refusing update.",
+        })
     }
 }
 
@@ -109,28 +115,24 @@ fn webassets_handler(req: &mut Request) -> IronResult<Response> {
  * requests).
  */
 trait JsonBody {
-    fn read_json<T: Decodable>(&mut self) -> Result<T, IronError>;
+    fn read_json<T: DeserializeOwned>(&mut self) -> Result<T, IronError>;
 }
 
 impl<'a, 'b> JsonBody for Body<'a, 'b> {
-    fn read_json<T: Decodable>(&mut self) -> Result<T, IronError> {
+    fn read_json<T: DeserializeOwned>(&mut self) -> Result<T, IronError> {
         let mut buf = String::new();
 
-        try!(
-            self.read_to_string(&mut buf)
+        self.read_to_string(&mut buf)
             .map_err(|_| {
                 println!("Failed to read request body.");
                 IronError::new(SPWebError::ServerError, status::InternalServerError)
-            })
-        );
+            })?;
 
-        Ok(try!(
-            json::decode::<T>(&buf)
+        serde_json::from_str::<T>(&buf)
             .map_err(|_| {
                 println!("Failed to parse request body.");
                 IronError::new(SPWebError::BadRequest, status::BadRequest)
             })
-        ))
     }
 }
 
@@ -157,26 +159,25 @@ impl Handler for TargetHandler {
                 println!("Request for {} options.", self.manager.kind.compact_name());
                 let options_ser = {
                     let options_guard = self.manager.options_read();
-                    json::encode(&*options_guard).unwrap()
+                    serde_json::to_string(&*options_guard).unwrap()
                 };
                 Ok(Response::with((status::Ok, options_ser)))
             },
             Method::Post => { /* Retrieve Data */
                 // try and get the parameters of the request
-                let dr: DataRequest = try!(req.body.read_json());
+                let dr: DataRequest = req.body.read_json()?;
                 println!("Request for {} data: {:?}", self.manager.kind.compact_name(), dr);
 
-                let body_writer = try!(
+                let body_writer =
                     // try and create a data reader out of this request
                     SPDataReader::new(self.manager.clone(), dr)
                     .ok_or_else(|| {
                         println!("Failed to create SPDataReader.");
                         IronError::new(SPWebError::BadRequest, status::BadRequest)
-                    })
-                );
+                    })?;
 
                 // respond with the data reader (aka. body writer) as the body
-                let r = Response::with((status::Ok));
+                let r = Response::with(status::Ok);
                 Ok(Response {
                     status: r.status,
                     headers: r.headers,
@@ -186,7 +187,7 @@ impl Handler for TargetHandler {
             },
             Method::Put => { /* Update Options */
                 // try and get the new/updated options from the request
-                let mut new_options: TargetOptions = try!(req.body.read_json());
+                let mut new_options: TargetOptions = req.body.read_json()?;
 
                 // make sure the received nonce matches the existing nonce
                 if new_options.nonce != self.manager.options_read().nonce {
@@ -205,10 +206,8 @@ impl Handler for TargetHandler {
                 new_options.nonce = new_nonce;
 
                 // actually update the options via the manager
-                try!(
-                    self.manager.options_update(new_options)
-                    .map_err(|_| IronError::new(SPWebError::ServerError, status::InternalServerError))
-                );
+                self.manager.options_update(new_options)
+                    .map_err(|_| IronError::new(SPWebError::ServerError, status::InternalServerError))?;
                 Ok(Response::with((format!("{}", new_nonce), status::Ok)))
             },
             _ => Err(IronError::new(SPWebError::InvalidMethod, status::MethodNotAllowed))

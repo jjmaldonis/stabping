@@ -11,10 +11,12 @@ use std::thread;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
-use persist::{TargetManager, ManagerError};
-use tcpping::run_tcpping_worker;
+use crate::persist::{TargetManager, ManagerError};
+use crate::tcpping::run_tcpping_worker;
 
-#[derive(RustcEncodable, RustcDecodable, Debug)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct TargetOptions {
     pub nonce: i32,
     pub addrs: Vec<String>,  // Vec of addresses (IPs to hit with TCP, files to download, etc.)
@@ -87,14 +89,14 @@ impl TargetKind {
         let mut targets = Vec::with_capacity(ALL_KINDS.len());
         for k in ALL_KINDS.iter() {
             targets.push(
-                Arc::new(try!(TargetManager::new(k, data_path)))
+                Arc::new(TargetManager::new(k, data_path)?)
             );
         }
         Ok(targets)
     }
 }
 
-#[derive(RustcEncodable, RustcDecodable, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MainConfiguration {
     pub web_port: u16,
     pub ws_port: u16,
